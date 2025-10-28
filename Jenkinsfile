@@ -59,7 +59,7 @@ pipeline {
                 sh '''
                     mkdir -p ${CI_LOGS}
                     . ${VENV_DIR}/bin/activate
-                    safety check --json > ${CI_LOGS}/safety-report.json || true
+                    safety scan > ${CI_LOGS}/safety-report..txt || true
                 '''
             }
         }
@@ -106,3 +106,4 @@ pipeline {
         }
     }
 }
+
