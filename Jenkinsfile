@@ -33,25 +33,26 @@ pipeline {
                                 python3 --version || true
                                 echo "PWD: $(pwd)"
                             '''
+
                             sh """
                                 echo "=== Create venv if missing ==="
                                 /usr/bin/python3 -m venv "${env.VENV_DIR}" || echo "venv creation failed or already exists"
-                                echo "=== venv contents after creation ==="
                                 ls -la "${env.VENV_DIR}" || true
                             """
-                            sh """
+
+                            sh '''
                                 echo "=== Ensure pip inside venv (if supported) ==="
-                                if [ -x "${env.VENV_DIR}/bin/python" ]; then
-                                    "${env.VENV_DIR}/bin/python" -m ensurepip --upgrade 2>/dev/null || echo "ensurepip not available or failed"
-                                    "${env.VENV_DIR}/bin/python" -m pip install --upgrade pip setuptools wheel || echo "pip upgrade failed (will try to proceed)"
-                                    echo "=== venv/bin contents ==="
-                                    ls -la "${env.VENV_DIR}/bin" || true
+                                if [ -x "${VENV_DIR}/bin/python" ]; then
+                                    "${VENV_DIR}/bin/python" -m ensurepip --upgrade 2>/dev/null || echo "ensurepip not available or failed"
+                                    "${VENV_DIR}/bin/python" -m pip install --upgrade pip setuptools wheel || echo "pip upgrade failed (will try to proceed)"
+                                    ls -la "${VENV_DIR}/bin" || true
                                 else
-                                    echo "ERROR: ${env.VENV_DIR}/bin/python not found"
-                                    mkdir -p ${env.CI_LOGS}
-                                    echo "venv-missing" > ${env.CI_LOGS}/setup-error.txt
+                                    echo "ERROR: ${VENV_DIR}/bin/python not found"
+                                    mkdir -p ${CI_LOGS}
+                                    echo "venv-missing" > ${CI_LOGS}/setup-error.txt
                                 fi
-                            """
+                            '''
+
                             sh """
                                 echo "=== Installing requirements via venv python -m pip ==="
                                 "${env.VENV_DIR}/bin/python" -m pip install --no-cache-dir -r requirements.txt || echo "pip install returned non-zero (continuing)"
@@ -118,4 +119,58 @@ pipeline {
             steps {
                 script {
                     timeout(time: 6, unit: 'MINUTES') {
-                        echo "Installing Trivy via snap 
+                        echo "Installing Trivy via snap (requires sudo)"
+                        catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
+                            sh '''
+                                set -e
+                                mkdir -p ${CI_LOGS}
+                                ${SUDO} snap install trivy --classic || echo "snap install trivy failed; ensure the agent allows sudo snap install"
+                                ${SUDO} snap run trivy --version || true
+                            '''
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Container Vulnerability Scan (Trivy)') {
+            steps {
+                script {
+                    timeout(time: 12, unit: 'MINUTES') {
+                        sh "mkdir -p ${env.CI_LOGS}"
+                        catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
+                            sh '''
+                                if command -v trivy >/dev/null 2>&1; then
+                                  trivy image --severity CRITICAL,HIGH --format json -o ${CI_LOGS}/trivy-report.json ${IMAGE_NAME} || echo "trivy exited non-zero (findings may be present)"
+                                else
+                                  ${SUDO} snap run trivy image --severity CRITICAL,HIGH --format json -o ${CI_LOGS}/trivy-report.json ${IMAGE_NAME} || echo "trivy not available or returned non-zero"
+                                fi
+                            '''
+                        }
+                    }
+                }
+            }
+        }
+
+        stage('Deploy Application') {
+            steps {
+                script {
+                    timeout(time: 10, unit: 'MINUTES') {
+                        echo "Deploying Docker container"
+                        catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
+                            sh "docker-compose up -d || true"
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    post {
+        always {
+            echo "Archiving CI logs..."
+            archiveArtifacts artifacts: "${env.CI_LOGS}/*.json, ${env.CI_LOGS}/*.log", allowEmptyArchive: true
+            echo "Pipeline finished."
+        }
+    }
+}
