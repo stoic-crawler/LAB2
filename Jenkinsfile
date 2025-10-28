@@ -116,19 +116,19 @@ pipeline {
             }
         }
 
-        stage('Install Trivy') {
+        stage('Prepare Trivy') {
             steps {
                 script {
-                    timeout(time: 5, unit: 'MINUTES') {
-                        echo "Installing Trivy (apt) - tolerant to permissions"
-                        catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
-                            sh '''
-                                set -e
-                                apt-get update || true
-                                apt-get install -y trivy || echo "apt install failed; ensure trivy is available on agent"
-                                trivy --version || true
-                            '''
-                        }
+                    timeout(time: 3, unit: 'MINUTES') {
+                        echo "Preparing Trivy scan (will use official Trivy container)"
+                        sh """
+                            set -e
+                            mkdir -p ${env.CI_LOGS}
+                            if ! command -v docker >/dev/null 2>&1; then
+                                echo "ERROR: docker is not available on this agent"
+                                exit 2
+                            fi
+                        """
                     }
                 }
             }
@@ -138,10 +138,14 @@ pipeline {
             steps {
                 script {
                     timeout(time: 10, unit: 'MINUTES') {
-                        sh "mkdir -p ${env.CI_LOGS}"
-                        catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
-                            sh "trivy image --severity CRITICAL,HIGH --format json -o ${env.CI_LOGS}/trivy-report.json ${env.IMAGE_NAME} || true"
-                        }
+                        // Run Trivy in an ephemeral container; requires access to docker socket
+                        sh """
+                            docker run --rm \\
+                              -v /var/run/docker.sock:/var/run/docker.sock \\
+                              -v \$(pwd)/${env.CI_LOGS}:/tmp/artifacts \\
+                              aquasec/trivy:latest \\
+                              image --severity CRITICAL,HIGH --format json -o /tmp/artifacts/trivy-report.json ${env.IMAGE_NAME}
+                        """
                     }
                 }
             }
