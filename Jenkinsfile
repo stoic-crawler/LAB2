@@ -10,6 +10,7 @@ pipeline {
         VENV_DIR   = 'venv'
         CI_LOGS    = 'ci_logs'
         IMAGE_NAME = 'arithmeticapi:latest'
+        SUDO       = 'sudo -n'
     }
 
     stages {
@@ -32,14 +33,12 @@ pipeline {
                                 python3 --version || true
                                 echo "PWD: $(pwd)"
                             '''
-
                             sh """
                                 echo "=== Create venv if missing ==="
                                 /usr/bin/python3 -m venv "${env.VENV_DIR}" || echo "venv creation failed or already exists"
                                 echo "=== venv contents after creation ==="
                                 ls -la "${env.VENV_DIR}" || true
                             """
-
                             sh """
                                 echo "=== Ensure pip inside venv (if supported) ==="
                                 if [ -x "${env.VENV_DIR}/bin/python" ]; then
@@ -53,7 +52,6 @@ pipeline {
                                     echo "venv-missing" > ${env.CI_LOGS}/setup-error.txt
                                 fi
                             """
-
                             sh """
                                 echo "=== Installing requirements via venv python -m pip ==="
                                 "${env.VENV_DIR}/bin/python" -m pip install --no-cache-dir -r requirements.txt || echo "pip install returned non-zero (continuing)"
@@ -116,60 +114,8 @@ pipeline {
             }
         }
 
-        stage('Prepare Trivy') {
+        stage('Install Trivy via snap') {
             steps {
                 script {
-                    timeout(time: 3, unit: 'MINUTES') {
-                        echo "Preparing Trivy scan (will use official Trivy container)"
-                        sh """
-                            set -e
-                            mkdir -p ${env.CI_LOGS}
-                            if ! command -v docker >/dev/null 2>&1; then
-                                echo "ERROR: docker is not available on this agent"
-                                exit 2
-                            fi
-                        """
-                    }
-                }
-            }
-        }
-
-        stage('Container Vulnerability Scan (Trivy)') {
-            steps {
-                script {
-                    timeout(time: 10, unit: 'MINUTES') {
-                        // Run Trivy in an ephemeral container; requires access to docker socket
-                        sh """
-                            docker run --rm \\
-                              -v /var/run/docker.sock:/var/run/docker.sock \\
-                              -v \$(pwd)/${env.CI_LOGS}:/tmp/artifacts \\
-                              aquasec/trivy:latest \\
-                              image --severity CRITICAL,HIGH --format json -o /tmp/artifacts/trivy-report.json ${env.IMAGE_NAME}
-                        """
-                    }
-                }
-            }
-        }
-
-        stage('Deploy Application') {
-            steps {
-                script {
-                    timeout(time: 10, unit: 'MINUTES') {
-                        echo "Deploying Docker container"
-                        catchError(buildResult: 'UNSTABLE', stageResult: 'UNSTABLE') {
-                            sh "docker-compose up -d || true"
-                        }
-                    }
-                }
-            }
-        }
-    }
-
-    post {
-        always {
-            echo "Archiving CI logs..."
-            archiveArtifacts artifacts: "${env.CI_LOGS}/*.json, ${env.CI_LOGS}/*.log", allowEmptyArchive: true
-            echo "Pipeline finished."
-        }
-    }
-}
+                    timeout(time: 6, unit: 'MINUTES') {
+                        echo "Installing Trivy via snap 
